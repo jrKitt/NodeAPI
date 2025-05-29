@@ -1,0 +1,137 @@
+const axios = require("axios");
+const jwt = require("jsonwebtoken");
+const userModel = require("../models/modelsuserModel");
+require('dotenv').config(); 
+
+const ACCESS_KEY = process.env.ACCESS_KEY || "access_secret";
+
+class LineLoginController {
+  async lineLogin(req, res) {
+    const { lineUserId, displayName, pictureUrl, accessToken } = req.body;
+
+    try {
+      console.log('LINE Login Request:', { lineUserId, displayName, pictureUrl });
+
+      const verifyResponse = await axios.get(
+        "https://api.line.me/oauth2/v2.1/verify",
+        {
+          params: {
+            access_token: accessToken
+          }
+        }
+      );
+
+      if (!verifyResponse.data || verifyResponse.data.client_id !== process.env.LINE_CLIENT_ID) {
+        return res.status(401).json({ 
+          success: false, 
+          message: "Invalid LINE access token" 
+        });
+      }
+
+      let user = await userModel.findByLineId(lineUserId);
+      
+      if (!user) {
+        console.log('LINE user not found, creating new user...');
+        
+        user = await userModel.createFromLineLogin({
+          lineUserId,
+          displayName,
+          pictureUrl
+        });
+        
+        console.log('New LINE user created:', user);
+      } else {
+        console.log('Existing LINE user found, updating profile...');
+        
+        await userModel.updateLineUser(lineUserId, {
+          displayName,
+          pictureUrl
+        });
+        
+        user = await userModel.findByLineId(lineUserId);
+        console.log('LINE user profile updated:', user);
+      }
+
+      const token = jwt.sign(
+        { 
+          userId: user.userId,
+          lineId: lineUserId,
+          loginType: 'line' 
+        }, 
+        ACCESS_KEY, 
+        { expiresIn: "24h" }
+      );
+
+      res.json({
+        success: true,
+        message: "เข้าสู่ระบบผ่าน LINE สำเร็จ",
+        token,
+        user: {
+          userId: user.userId,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          lineId: user.lineId,
+          profilePicture: user.profilePicture,
+          lineDisplayName: user.lineDisplayName,
+          citizenId: user.citizenId,
+          phoneNumber: user.phoneNumber,
+          loginType: 'line'
+        }
+      });
+
+    } catch (error) {
+      console.error("LINE LIFF Login error:", error);
+      res.status(500).json({ 
+        success: false, 
+        message: "เกิดข้อผิดพลาดในการเข้าสู่ระบบ",
+        error: error.message 
+      });
+    }
+  }
+
+  async linkLineAccount(req, res) {
+    const { userId, lineUserId, displayName, pictureUrl } = req.body;
+
+    try {
+      const existingUser = await userModel.findById(userId);
+      if (!existingUser) {
+        return res.status(404).json({
+          success: false,
+          message: "ไม่พบข้อมูลผู้ใช้"
+        });
+      }
+
+      const lineUser = await userModel.findByLineId(lineUserId);
+      if (lineUser && lineUser.userId !== userId) {
+        return res.status(400).json({
+          success: false,
+          message: "LINE account นี้ถูกใช้กับบัญชีอื่นแล้ว"
+        });
+      }
+
+      await userModel.linkLineAccount(userId, {
+        lineUserId,
+        displayName,
+        pictureUrl
+      });
+
+      res.json({
+        success: true,
+        message: "ผูก LINE account สำเร็จ"
+      });
+
+    } catch (error) {
+      console.error("Link LINE account error:", error);
+      res.status(500).json({
+        success: false,
+        message: "เกิดข้อผิดพลาดในการผูก LINE account",
+        error: error.message
+      });
+    }
+  }
+
+  async lineCallback(req, res) {
+  }
+}
+
+module.exports = new LineLoginController();
